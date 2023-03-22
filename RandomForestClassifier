@@ -1,0 +1,29 @@
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import accuracy_score,precision_score,recall_score
+from sklearn.ensemble import RandomForestClassifier
+import pandas as pd
+
+
+df = pd.read_csv('twitter_result.csv')
+
+def vectorize(data,tfidf_vect_fit):
+    X_tfidf = tfidf_vect_fit.transform(data)
+    X_tfidf_df = pd.DataFrame(X_tfidf.toarray())
+    X_tfidf_df.columns = tfidf_vect_fit.get_feature_names_out()
+    return(X_tfidf_df)
+    
+df = df.dropna()
+X_train, X_test = train_test_split(df, test_size=0.25,stratify=df['Message'])
+tfidf_vect = TfidfVectorizer()
+tfidf_vect_fit=tfidf_vect.fit(X_train['Translated Post'])
+X=vectorize(X_train['Translated Post'], tfidf_vect_fit)
+from sklearn.metrics import accuracy_score,precision_score,recall_score
+from sklearn.ensemble import RandomForestClassifier
+tfidf_vect = TfidfVectorizer()
+tfidf_vect_fit=tfidf_vect.fit(X_train['Translated Post'])
+testing_data=vectorize(X_test['Translated Post'],tfidf_vect_fit)
+rf_final = RandomForestClassifier(n_estimators=100,max_depth=20)
+rf_final.fit(X, X_train['Message'].values.ravel())
+y_pred = rf_final.predict(testing_data)
+accuracy_score(X_test['Message'],y_pred)
