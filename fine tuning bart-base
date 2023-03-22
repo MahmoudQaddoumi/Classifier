@@ -1,0 +1,112 @@
+import pandas as pd
+from sklearn.metrics import classification_report
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, pipeline
+import torch
+from sklearn.model_selection import train_test_split
+import torch
+from torch.utils.data import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+import random
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+
+def fine_tuning_text_classification_model(df: pd.DataFrame, model_name: str, text_col: str, label_col: str,
+                                          output_model_name: str = 'classifier'):
+    
+    
+    class TrainingDataSet(Dataset):
+        """
+        to initiate Dataset suitable for training.
+        """
+
+        def __init__(self, encoding, labels):
+            """
+
+            :param encoding:
+            :param labels:
+            :return:
+            """
+            self.encoding = encoding
+            self.labels = labels
+
+        def __getitem__(self, idx):
+            item = {key: torch.tensor(value[idx]) for key, value in self.encoding.items()}
+            item['labels'] = torch.tensor(self.labels[idx])
+            return item
+
+        def __len__(self):
+            return len(self.labels)
+
+    def compute_metrics(eval_pred):
+        predictions, labels = eval_pred
+        print(classification_report(labels, predictions))
+        # return metric.compute(predictions=predictions[:, 0], references=labels)
+
+    all_labels = df[label_col].unique().tolist()
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    id2label = {idx: all_labels[idx] for idx in range(len(all_labels))}
+    label2id = {v: k for k, v in id2label.items()}
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name,
+                                                               num_labels=len(all_labels),
+                                                               id2label=id2label,
+                                                               label2id=label2id).to(device)
+
+    X_train, X_test, y_train, y_test = train_test_split(df[text_col], df[label_col], test_size=0.1,
+                                                        # stratify=df[label_col],
+                                                        random_state=28)
+    train_dataset = TrainingDataSet(encoding=tokenizer(X_train.values.tolist(),
+                                                       truncation=True,
+                                                       padding=True,
+                                                       max_length=512),
+                                    labels=[label2id[i] for i in y_train.values.tolist()])
+    test_dataset = TrainingDataSet(encoding=tokenizer(X_test.values.tolist(),
+                                                      truncation=True,
+                                                      padding=True,
+                                                      max_length=512),
+                                   labels=[label2id[i] for i in y_test.values.tolist()])
+
+    training_args = TrainingArguments(output_dir=output_model_name,
+                                      learning_rate=2e-5,
+                                      per_device_train_batch_size=16,
+                                      per_device_eval_batch_size=16,
+                                      num_train_epochs=6,
+                                      weight_decay=0.01,
+                                      save_strategy="epoch",
+                                      push_to_hub=False)
+    trainer = Trainer(model=model,
+                      args=training_args,
+                      train_dataset=train_dataset,
+                      eval_dataset=test_dataset,
+                      tokenizer=tokenizer,
+                      compute_metrics=compute_metrics)
+    trainer.train()
+    return trainer
+
+model = fine_tuning_text_classification_model(df=df,
+                                              model_name="facebook/bart-base",
+                                              text_col="Translated Post", 
+                                              label_col="Message",
+                                              output_model_name='bart_fine_tuning')
+model.save_model("bart_fine_tuning")
+classifier = pipeline('text-classification',
+                    model=AutoModelForSequenceClassification.from_pretrained('bart_fine_tuning'),
+                    tokenizer = AutoTokenizer.from_pretrained('bart_fine_tuning'),
+                    device="cuda:0" if torch.cuda.is_available() else "cpu")
+X_train, X_test, y_train, y_test = train_test_split(df['Translated Post'], df['Message'], test_size=0.1,
+                                                        random_state=28)
+y_pred = [classifier(x)[0]['label'] for x in X_test]
+print(classification_report(y_test, y_pred))
+#Result is:
+#                           precision    recall  f1-score   support
+#
+#           Disease Rumors       0.86      0.78      0.82        55
+#Governance and Healthcare       0.90      0.95      0.93       139
+#          Health Measures       0.81      0.73      0.77        41
+#                   Stigma       1.00      1.00      1.00         4
+#                 Vaccines       0.91      0.93      0.92       102
+#
+#                 accuracy                           0.89       341
+#                macro avg       0.90      0.88      0.89       341
+#             weighted avg       0.89      0.89      0.89       341
+                                              
